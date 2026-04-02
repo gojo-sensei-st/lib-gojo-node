@@ -49,7 +49,7 @@ function unclampEd25519PrivateKey(clampedSk) {
     const unclampedSk = new Uint8Array(clampedSk);
 
     // Fix the first byte
-    unclampedSk[0] |= 6; // Ensure last 3 bits match expected `110` pattern
+    unclampedSk[0] |= 7; // Restore all 3 low bits — fix: was 6 (missing bit 0)
 
     // Fix the last byte
     unclampedSk[31] |= 128; // Restore the highest bit
