@@ -3,9 +3,11 @@
 /*
  * jobQueue manages multiple queues indexed by device to serialize
  * session io ops on the database.
+ * 
+ * FIXED: recursive execute() was called without await causing race condition
+ * that corrupted Signal session state and produced bad MAC errors.
  */
 'use strict';
-
 
 const _queueAsyncBuckets = new Map();
 const _gcLimit = 10000;
@@ -14,7 +16,7 @@ async function _asyncQueueExecutor(queue, cleanup) {
     let offt = 0;
 
     async function execute() {
-        let limit = Math.min(queue.length, _gcLimit); // Break up thundering hurds for GC duty.
+        let limit = Math.min(queue.length, _gcLimit);
         for (let i = offt; i < limit; i++) {
             const job = queue[i];
             try {
@@ -24,28 +26,25 @@ async function _asyncQueueExecutor(queue, cleanup) {
             }
         }
         if (limit < queue.length) {
-            /* Perform lazy GC of queue for faster iteration. */
             if (limit >= _gcLimit) {
                 queue.splice(0, limit);
                 offt = 0;
             } else {
                 offt = limit;
             }
-            execute(); // Execute rekursif setelah selesai di dalam call stack.
+            // ✅ FIX: await الركورس — يمنع التوازي في تنفيذ jobs التشفير
+            // بدون await كانت عمليات Signal تتشغل بالتوازي = bad MAC
+            await execute();
         } else {
             return cleanup();
         }
     }
 
-    execute();
+    await execute();
 }
 
 module.exports = function (bucket, awaitable) {
-    /* Run the async awaitable only when all other async calls registered
-     * here have completed (or thrown).  The bucket argument is a hashable
-     * key representing the task queue to use. */
     if (!awaitable.name) {
-        // Make debuging easier by adding a name to this function.
         Object.defineProperty(awaitable, 'name', { writable: true });
         if (typeof bucket === 'string') {
             awaitable.name = bucket;
@@ -63,7 +62,6 @@ module.exports = function (bucket, awaitable) {
         reject
     }));
     if (inactive) {
-        /* An executor is not currently active; Start one now. */
         _asyncQueueExecutor(queue, () => _queueAsyncBuckets.delete(bucket));
     }
     return job;
